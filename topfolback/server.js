@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 3000;
 
 // ==================== MIDDLEWARE ====================
 app.use(cors({
-    origin: true,
+    origin: 'https://topfolio.netlify.app/',
     credentials: true
 }));
 
