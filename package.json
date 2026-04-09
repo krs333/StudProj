@@ -1,0 +1,17 @@
+{
+  "name": "mouseski-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mssql": "^8.1.2",
+    "pg": "^8.20.0",
+    "tedious": "^19.2.1"
+  }
+}
