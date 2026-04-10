@@ -606,7 +606,10 @@ body{
 <div class="toast" id="toast"></div>
 
 <script>
+// ==================== 🔥 ИСПРАВЛЕНО: URL БЭКЕНДА 🔥 ====================
 const API = 'https://topfolioback.onrender.com/api';
+// ====================================================================
+
 const SESSION_KEY = 'topfolio_session';
 let S = {
   user:null,allDesigners:[],lbImages:[],lbIndex:0,
@@ -633,7 +636,7 @@ async function api(path,method='GET',body){
     if(body)opts.body=JSON.stringify(body);
     const res=await fetch(API+path,opts);
     return await res.json();
-  }catch(e){showToast('Ошибка соединения с сервером');return{};}
+  }catch(e){showToast('Ошибка соединения с сервером');return {};}
 }
 
 function switchAuthTab(tab){
