@@ -8,7 +8,6 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 // ==================== MIDDLEWARE ====================
 app.use(cors({
     origin: 'https://topfolio.netlify.app',
@@ -125,7 +124,10 @@ if (BOT_TOKEN) {
             await ctx.reply('❌ Ошибка сервера.');
         }
     });
-    bot.launch().then(() => console.log('🤖 Telegram бот запущен'));
+    bot.launch().then(() => console.log('🤖 Telegram бот запущен'))
+  .catch(err => {
+    console.error('❌ Ошибка запуска бота:', err.message);
+  });
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
 } else {
