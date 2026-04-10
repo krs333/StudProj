@@ -79,9 +79,7 @@ async function sendTelegramNotification(designerUsername, clientContact) {
     try {
         const normalized = normalizeUsername(designerUsername);
         const result = await pool.query(
-            `SELECT telegram_chat_id 
-             FROM designers 
-             WHERE lower(trim(leading '@' from telegramuser)) = $1,
+            'SELECT telegram_chat_id FROM designers WHERE lower(trim(leading \'@\' from telegramuser)) = $1',
             [normalized]
         );
 
@@ -115,10 +113,9 @@ if (BOT_TOKEN) {
 
         try {
             const result = await pool.query(
-                `UPDATE designers 
-                 SET telegram_chat_id = $1 
-                 WHERE lower(trim(leading '@' from telegramuser)) = $2,
-                [chatId, username]
+    'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramuser)) = $2',
+    [chatId, username]
+);
             );
 
             if (result.rowCount > 0) {
