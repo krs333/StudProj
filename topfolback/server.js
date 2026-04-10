@@ -79,7 +79,7 @@ async function sendTelegramNotification(designerUsername, clientContact) {
     try {
         const normalized = normalizeUsername(designerUsername);
         const result = await pool.query(
-            'SELECT telegram_chat_id FROM designers WHERE lower(trim(leading \'@\' from telegramuser)) = $1',
+            'SELECT telegram_chat_id FROM designers WHERE lower(trim(leading \'@\' from telegramusername)) = $1',
             [normalized]
         );
 
@@ -110,7 +110,7 @@ if (BOT_TOKEN) {
         }
         try {
             const result = await pool.query(
-                'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramuser)) = $2',
+                'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramusername)) = $2',
                 [chatId, username]
             );
             if (result.rowCount > 0) {
@@ -220,7 +220,7 @@ app.get('/api/designers', async (req, res) => {
     console.log('📋 Запрос списка дизайнеров');
     try {
         const designers = await pool.query(`
-            SELECT u.Id, u.Name, d.Bio, d.TelegramUser,
+            SELECT u.Id, u.Name, d.Bio, d.TelegramUsername,
                    COALESCE(
                      json_agg(
                        json_build_object('url', w.ImageUrl, 'title', COALESCE(w.Title, ''))
@@ -246,7 +246,7 @@ app.get('/api/designers/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query(`
-            SELECT u.Id, u.Name, u.ContactInfo, d.Bio, d.TelegramUser,
+            SELECT u.Id, u.Name, u.ContactInfo, d.Bio, d.TelegramUsername,
                    COALESCE(
                      json_agg(
                        json_build_object('url', w.ImageUrl, 'title', COALESCE(w.Title, ''))
@@ -274,13 +274,13 @@ app.get('/api/designers/:id', async (req, res) => {
 app.post('/api/designer-profile', async (req, res) => {
     console.log('🎨 Сохранение профиля дизайнера, фото:', req.body.works?.length || 0);
     try {
-        const { name, bio, telegramUser } = req.body;
+        const { name, bio, telegramUsername } = req.body;
         const userId = req.body.userId || req.body.id;
         const contactInfo = normalizeContactInfo(req.body);
         const works = normalizeWorks(req.body);
-        const normalizedTelegramUsername = normalizeUsername(telegramUser || contactInfo);
+        const normalizedTelegramUsername = normalizeUsername(telegramUsername || contactInfo);
 
-        if (!userId || !name || !contactInfo || !normalizedTelegramUser) {
+        if (!userId || !name || !contactInfo || !normalizedTelegramUsername) {
             return res.status(400).json({ success: false, message: 'Не хватает данных' });
         }
 
@@ -290,9 +290,9 @@ app.post('/api/designer-profile', async (req, res) => {
         );
 
         await pool.query(
-            `INSERT INTO Designers (UserId, Bio, TelegramUser) VALUES ($1, $2, $3) 
-             ON CONFLICT (UserId) DO UPDATE SET Bio = $2, TelegramUser = $3`,
-            [userId, bio || '', normalizedTelegramUser]
+            `INSERT INTO Designers (UserId, Bio, TelegramUsername) VALUES ($1, $2, $3) 
+             ON CONFLICT (UserId) DO UPDATE SET Bio = $2, TelegramUsername = $3`,
+            [userId, bio || '', normalizedTelegramUsername]
         );
 
         await pool.query('DELETE FROM Works WHERE DesignerId = $1', [userId]);
@@ -426,10 +426,10 @@ app.post('/api/send-feedback', async (req, res) => {
         }
 
         const designerRes = await pool.query(
-            'SELECT TelegramUser FROM Designers WHERE UserId = $1',
+            'SELECT TelegramUsername FROM Designers WHERE UserId = $1',
             [designerId]
         );
-        const designerUsername = normalizeUsername(designerRes.rows[0]?.telegramuser || '');
+        const designerUsername = normalizeUsername(designerRes.rows[0]?.telegramusername || '');
 
         if (!designerUsername) {
             return res.status(404).json({
