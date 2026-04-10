@@ -102,22 +102,17 @@ async function sendTelegramNotification(designerUsername, clientContact) {
 
 if (BOT_TOKEN) {
     bot = new Telegraf(BOT_TOKEN);
-
     bot.start(async (ctx) => {
         const username = normalizeUsername(ctx.from?.username || '');
         const chatId = ctx.chat.id;
-
         if (!username) {
             return ctx.reply('❌ У вас не задан Telegram username.');
         }
-
         try {
             const result = await pool.query(
-    'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramuser)) = $2',
-    [chatId, username]
-);
+                'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramuser)) = $2',
+                [chatId, username]
             );
-
             if (result.rowCount > 0) {
                 console.log(`✅ Сохранён chat_id для @${username}`);
                 await ctx.reply('✅ Вы зарегистрированы! Теперь будете получать уведомления об откликах.');
@@ -130,7 +125,6 @@ if (BOT_TOKEN) {
             await ctx.reply('❌ Ошибка сервера.');
         }
     });
-
     bot.launch().then(() => console.log('🤖 Telegram бот запущен'));
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
