@@ -1,13 +1,10 @@
-﻿import express from 'express';
+import express from 'express';
 import cors from 'cors';
-import axios from 'axios';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import { Telegraf } from 'telegraf';
 
 dotenv.config();
-
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,8 +14,6 @@ app.use(cors({
     origin: 'https://topfolio.netlify.app',
     credentials: true
 }));
-
-// Увеличиваем лимит ДО 50 МБ для фото!
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use((req, res, next) => {
@@ -41,6 +36,16 @@ const pool = process.env.DATABASE_URL
         database: process.env.DB_NAME || 'topfolio',
     });
 
+async function testDB() {
+    try {
+        await pool.query('SELECT NOW()');
+        console.log('✅ PostgreSQL подключён успешно!');
+    } catch (err) {
+        console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
+    }
+}
+
+// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 function normalizeContactInfo(body = {}) {
     const value =
         body.contactInfo ??
@@ -57,17 +62,83 @@ function normalizeWorks(body = {}) {
     return Array.isArray(raw) ? raw : [];
 }
 
-function normalizeTelegramUsername(value = '') {
+function normalizeUsername(value = '') {
     return String(value || '').trim().replace(/^@+/, '').toLowerCase();
 }
 
-async function testDB() {
-    try {
-        const res = await pool.query('SELECT NOW()');
-        console.log('✅ PostgreSQL подключён успешно!');
-    } catch (err) {
-        console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
+// ==================== TELEGRAM БОТ ====================
+const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_TOKEN || '';
+let bot = null;
+
+async function sendTelegramNotification(designerUsername, clientContact) {
+    if (!bot) {
+        console.warn('⚠️ Бот не запущен, уведомление не отправлено');
+        return false;
     }
+
+    try {
+        const normalized = normalizeUsername(designerUsername);
+        const result = await pool.query(
+            `SELECT telegram_chat_id 
+             FROM designers 
+             WHERE lower(trim(leading '@' from telegramuser)) = $1,
+            [normalized]
+        );
+
+        const chatId = result.rows[0]?.telegram_chat_id;
+
+        if (!chatId) {
+            console.log(`⚠️ Дизайнер @${normalized} не активировал бота`);
+            return false;
+        }
+
+        await bot.telegram.sendMessage(chatId, `🎨 Новый отклик!\nКлиент: ${clientContact}`);
+        console.log(`✅ Уведомление отправлено дизайнеру @${normalized}`);
+        return true;
+
+    } catch (err) {
+        console.error('Ошибка отправки уведомления:', err.message);
+        return false;
+    }
+}
+
+if (BOT_TOKEN) {
+    bot = new Telegraf(BOT_TOKEN);
+
+    bot.start(async (ctx) => {
+        const username = normalizeUsername(ctx.from?.username || '');
+        const chatId = ctx.chat.id;
+
+        if (!username) {
+            return ctx.reply('❌ У вас не задан Telegram username.');
+        }
+
+        try {
+            const result = await pool.query(
+                `UPDATE designers 
+                 SET telegram_chat_id = $1 
+                 WHERE lower(trim(leading '@' from telegramuser)) = $2,
+                [chatId, username]
+            );
+
+            if (result.rowCount > 0) {
+                console.log(`✅ Сохранён chat_id для @${username}`);
+                await ctx.reply('✅ Вы зарегистрированы! Теперь будете получать уведомления об откликах.');
+            } else {
+                console.log(`⚠️ Дизайнер @${username} не найден в БД`);
+                await ctx.reply('⚠️ Ваш профиль не найден. Сначала сохраните профиль на сайте.');
+            }
+        } catch (err) {
+            console.error('Ошибка сохранения chat_id:', err.message);
+            await ctx.reply('❌ Ошибка сервера.');
+        }
+    });
+
+    bot.launch().then(() => console.log('🤖 Telegram бот запущен'));
+    process.once('SIGINT', () => bot.stop('SIGINT'));
+    process.once('SIGTERM', () => bot.stop('SIGTERM'));
+} else {
+    console.warn('⚠️ BOT_TOKEN не задан — Telegram бот не запущен');
 }
 
 // ==================== РОУТЫ ====================
@@ -80,7 +151,7 @@ app.post('/api/register', async (req, res) => {
     console.log('📝 Регистрация:', req.body);
     try {
         const { name, login, password } = req.body;
-        
+
         if (!name || !login || !password) {
             return res.status(400).json({ success: false, message: 'Заполните все поля' });
         }
@@ -107,7 +178,7 @@ app.post('/api/login', async (req, res) => {
     console.log('🔑 Вход:', req.body.login);
     try {
         const { login, password } = req.body;
-        
+
         if (!login || !password) {
             return res.status(400).json({ success: false, message: 'Введите логин и пароль' });
         }
@@ -116,7 +187,7 @@ app.post('/api/login', async (req, res) => {
             'SELECT Id, Name, Login, Role, ContactInfo FROM Users WHERE Login = $1 AND Password = $2',
             [login, password]
         );
-        
+
         if (result.rows.length === 0) {
             return res.status(401).json({ success: false, message: 'Неверный логин или пароль' });
         }
@@ -135,17 +206,17 @@ app.post('/api/login', async (req, res) => {
             works = wRes.rows;
         }
 
-        res.json({ 
-            success: true, 
-            user: { 
-                id: user.id, 
-                name: user.name, 
-                login: user.login, 
-                role: user.role, 
+        res.json({
+            success: true,
+            user: {
+                id: user.id,
+                name: user.name,
+                login: user.login,
+                role: user.role,
                 contactInfo: user.contactinfo || '',
-                designerData, 
-                works 
-            } 
+                designerData,
+                works
+            }
         });
     } catch (error) {
         console.error('Ошибка входа:', error);
@@ -153,12 +224,12 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// ПОЛУЧИТЬ ВСЕХ ДИЗАЙНЕРОВ (для ленты)
+// ПОЛУЧИТЬ ВСЕХ ДИЗАЙНЕРОВ
 app.get('/api/designers', async (req, res) => {
     console.log('📋 Запрос списка дизайнеров');
     try {
         const designers = await pool.query(`
-            SELECT u.Id, u.Name, d.Bio, d.TelegramUsername,
+            SELECT u.Id, u.Name, d.Bio, d.TelegramUser,
                    COALESCE(
                      json_agg(
                        json_build_object('url', w.ImageUrl, 'title', COALESCE(w.Title, ''))
@@ -177,13 +248,14 @@ app.get('/api/designers', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 // ПОЛУЧИТЬ ОДНОГО ДИЗАЙНЕРА ПО ID
 app.get('/api/designers/:id', async (req, res) => {
     console.log('📋 Запрос дизайнера по ID:', req.params.id);
     try {
         const { id } = req.params;
         const result = await pool.query(`
-            SELECT u.Id, u.Name, u.ContactInfo, d.Bio, d.TelegramUsername,
+            SELECT u.Id, u.Name, u.ContactInfo, d.Bio, d.TelegramUser,
                    COALESCE(
                      json_agg(
                        json_build_object('url', w.ImageUrl, 'title', COALESCE(w.Title, ''))
@@ -196,9 +268,7 @@ app.get('/api/designers/:id', async (req, res) => {
             WHERE u.Id = $1 AND u.Role = 'designer'
             GROUP BY u.Id, d.UserId
         `, [id]);
-        
-        console.log('Найдено:', result.rows.length);
-        
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Дизайнер не найден' });
         }
@@ -208,44 +278,37 @@ app.get('/api/designers/:id', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-// СОХРАНЕНИЕ ПРОФИЛЯ ДИЗАЙНЕРА (с фото)
+
+// СОХРАНЕНИЕ ПРОФИЛЯ ДИЗАЙНЕРА
 app.post('/api/designer-profile', async (req, res) => {
     console.log('🎨 Сохранение профиля дизайнера, фото:', req.body.works?.length || 0);
     try {
-        const { name, bio, telegramUsername } = req.body;
+        const { name, bio, telegramUser } = req.body;
         const userId = req.body.userId || req.body.id;
         const contactInfo = normalizeContactInfo(req.body);
         const works = normalizeWorks(req.body);
-        const normalizedTelegramUsername = normalizeTelegramUsername(telegramUsername || contactInfo);
-        
-        if (!userId || !name || !contactInfo || !normalizedTelegramUsername) {
+        const normalizedTelegramUsername = normalizeUsername(telegramUser || contactInfo);
+
+        if (!userId || !name || !contactInfo || !normalizedTelegramUser) {
             return res.status(400).json({ success: false, message: 'Не хватает данных' });
         }
-        
-        // Обновляем пользователя
-        const userUpdateResult = await pool.query(
+
+        await pool.query(
             'UPDATE Users SET Name = $1, ContactInfo = $2, Role = $3 WHERE Id = $4',
             [name, contactInfo, 'designer', userId]
         );
-        if (userUpdateResult.rowCount === 0) {
-            return res.status(404).json({ success: false, message: 'Пользователь не найден' });
-        }
-        
-        // Сохраняем данные дизайнера
+
         await pool.query(
-            `INSERT INTO Designers (UserId, Bio, TelegramUsername) VALUES ($1, $2, $3) 
-             ON CONFLICT (UserId) DO UPDATE SET Bio = $2, TelegramUsername = $3`,
-            [userId, bio || '', normalizedTelegramUsername]
+            `INSERT INTO Designers (UserId, Bio, TelegramUser) VALUES ($1, $2, $3) 
+             ON CONFLICT (UserId) DO UPDATE SET Bio = $2, TelegramUser = $3`,
+            [userId, bio || '', normalizedTelegramUser]
         );
-        
-        // Удаляем старые работы
+
         await pool.query('DELETE FROM Works WHERE DesignerId = $1', [userId]);
-        
-        // Добавляем новые работы
+
+        const MAX_IMAGE_LENGTH = 50 * 1024 * 1024;
         let savedCount = 0;
-        const worksToSave = works;
-        const MAX_IMAGE_LENGTH = 50 * 1024 * 1024; // до 50MB строкой
-        for (const work of worksToSave) {
+        for (const work of works) {
             const imageUrl =
                 typeof work === 'string'
                     ? work
@@ -258,7 +321,7 @@ app.post('/api/designer-profile', async (req, res) => {
                 savedCount++;
             }
         }
-        
+
         console.log(`✅ Сохранено ${savedCount} фото`);
         res.json({ success: true, message: 'Профиль сохранён' });
     } catch (error) {
@@ -274,17 +337,20 @@ app.post('/api/client-profile', async (req, res) => {
         const userId = req.body.userId || req.body.id;
         const { name } = req.body;
         const contactInfo = normalizeContactInfo(req.body);
+
         if (!userId || !name) {
             return res.status(400).json({ success: false, message: 'Не хватает данных' });
         }
+
         const updateResult = await pool.query(
             'UPDATE Users SET Name = $1, ContactInfo = $2, Role = $3 WHERE Id = $4 RETURNING Id, Name, ContactInfo, Role',
             [name, contactInfo, 'client', userId]
         );
+
         if (updateResult.rowCount === 0) {
             return res.status(404).json({ success: false, message: 'Пользователь не найден' });
         }
-        console.log('✅ Клиент сохранён:', updateResult.rows[0]);
+
         res.json({ success: true, user: updateResult.rows[0] });
     } catch (error) {
         console.error('Ошибка:', error);
@@ -292,7 +358,7 @@ app.post('/api/client-profile', async (req, res) => {
     }
 });
 
-// ПОЛУЧИТЬ ПРОФИЛЬ КЛИЕНТА (для личного кабинета)
+// ПОЛУЧИТЬ ПРОФИЛЬ КЛИЕНТА
 app.get('/api/client-profile/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -309,118 +375,103 @@ app.put('/api/client-profile/:userId', async (req, res) => {
         const { userId } = req.params;
         const { name } = req.body;
         const contactInfo = normalizeContactInfo(req.body);
+
         if (!name) {
             return res.status(400).json({ success: false, message: 'Введите имя' });
         }
+
         const updateResult = await pool.query(
             'UPDATE Users SET Name = $1, ContactInfo = $2 WHERE Id = $3 RETURNING Id, Name, ContactInfo, Role',
             [name, contactInfo, userId]
         );
+
         if (updateResult.rowCount === 0) {
             return res.status(404).json({ success: false, message: 'Пользователь не найден' });
         }
+
         res.json({ success: true, user: updateResult.rows[0] });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
+// ОБНОВИТЬ ПРОФИЛЬ КЛИЕНТА 
 app.put('/api/client-profile', async (req, res) => {
     try {
         const userId = req.body.userId || req.body.id;
         const { name } = req.body;
         const contactInfo = normalizeContactInfo(req.body);
+
         if (!userId || !name) {
             return res.status(400).json({ success: false, message: 'Не хватает данных' });
         }
+
         const updateResult = await pool.query(
             'UPDATE Users SET Name = $1, ContactInfo = $2, Role = $3 WHERE Id = $4 RETURNING Id, Name, ContactInfo, Role',
             [name, contactInfo, 'client', userId]
         );
+
         if (updateResult.rowCount === 0) {
             return res.status(404).json({ success: false, message: 'Пользователь не найден' });
         }
-        console.log('✅ Клиент сохранён (PUT без params):', updateResult.rows[0]);
+
         res.json({ success: true, user: updateResult.rows[0] });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
+
 // ОТПРАВКА ОТКЛИКА КЛИЕНТОМ ДИЗАЙНЕРУ
 app.post('/api/send-feedback', async (req, res) => {
     console.log('💬 Получен отклик от клиента:', req.body);
     try {
         const { designerId, clientContact, clientName } = req.body;
-        
+
         if (!designerId || !clientContact) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Не хватает данных: designerId, clientContact' 
+            return res.status(400).json({
+                success: false,
+                message: 'Не хватает данных: designerId, clientContact'
             });
         }
 
         const designerRes = await pool.query(
-            'SELECT TelegramUsername FROM Designers WHERE UserId = $1',
+            'SELECT TelegramUser FROM Designers WHERE UserId = $1',
             [designerId]
         );
-        const designerUsername = normalizeTelegramUsername(designerRes.rows[0]?.telegramusername || '');
+        const designerUsername = normalizeUsername(designerRes.rows[0]?.telegramuser || '');
+
         if (!designerUsername) {
             return res.status(404).json({
                 success: false,
                 message: 'У дизайнера не указан Telegram username'
             });
         }
-        
-        // 1. Сохраняем отклик в базу данных (если нужно хранить историю)
+
         const result = await pool.query(
             `INSERT INTO Feedbacks (designer_id, client_contact, client_name, created_at) 
              VALUES ($1, $2, $3, NOW()) RETURNING id`,
             [designerId, clientContact, clientName || 'Клиент']
         );
-        
+
         console.log(`✅ Отклик сохранён в БД, ID: ${result.rows[0].id}`);
-        
-        // 2. Отправляем уведомление в C# бота
-        const BOT_URL = process.env.BOT_URL || 'http://localhost:5001';
-        
-        try {
-            // Используем fetch (в Node.js 18+ уже встроен)
-            const notifyResponse = await fetch(`${BOT_URL}/notify`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    designerUsername: designerUsername,  // Telegram username дизайнера
-                    clientContact: clientContact         // Контакт клиента (телефон или @username)
-                })
-            });
-            
-            if (notifyResponse.ok) {
-                console.log(`✅ Уведомление отправлено дизайнеру @${designerUsername}`);
-            } else if (notifyResponse.status === 404) {
-                console.log(`⚠️ Дизайнер @${designerUsername} не активировал бота`);
-            } else {
-                console.log(`⚠️ Бот вернул статус: ${notifyResponse.status}`);
-            }
-        } catch (botError) {
-            // Не прерываем выполнение, если бот недоступен
-            console.error('❌ Ошибка связи с ботом:', botError.message);
-        }
-        
-        res.json({ 
-            success: true, 
-            message: 'Отклик успешно отправлен дизайнеру' 
+
+        await sendTelegramNotification(designerUsername, clientContact);
+
+        res.json({
+            success: true,
+            message: 'Отклик успешно отправлен дизайнеру'
         });
-        
+
     } catch (error) {
         console.error('Ошибка при отправке отклика:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Ошибка сервера при отправке отклика' 
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при отправке отклика'
         });
     }
 });
+
+// ==================== ЗАПУСК ====================
 app.listen(PORT, async () => {
     console.log(`🚀 Backend запущен на порту ${PORT}`);
     await testDB();
