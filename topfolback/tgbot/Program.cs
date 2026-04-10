@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using System.Net;
 using Npgsql;
@@ -7,7 +7,8 @@ using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using System.Text.Json.Serialization;
-
+using System.Threading;
+using System.Threading.Tasks;
 
 string botToken =
     Environment.GetEnvironmentVariable("BOT_TOKEN")
@@ -36,7 +37,6 @@ string BuildConnectionString(string raw)
     var builder = new NpgsqlConnectionStringBuilder(raw);
     bool isRender = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RENDER"));
 
-    // Render Postgres requires SSL. Local Postgres usually does not.
     if (isRender)
     {
         builder.SslMode = SslMode.Require;
@@ -54,12 +54,52 @@ string BuildConnectionString(string raw)
 string effectiveConnectionString = BuildConnectionString(connectionString);
 string NormalizeUsername(string value) => (value ?? string.Empty).Trim().TrimStart('@').ToLowerInvariant();
 
+// Запускаем обработку обновлений в фоне
 _ = Task.Run(() => HandleUpdates());
 
+// ==================== НОВЫЙ КОД: Healthcheck для Render ====================
+// Добавляем отдельный поток для обработки healthcheck запросов
+_ = Task.Run(() => RunHealthCheckServer());
+
+async Task RunHealthCheckServer()
+{
+    var healthServer = new HttpListener();
+    int healthPort = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var hp) ? hp : 8080;
+    string healthPrefix = isRender ? $"http://*:{healthPort}/health" : $"http://localhost:{healthPort}/health";
+    healthServer.Prefixes.Add(healthPrefix);
+    healthServer.Start();
+    Console.WriteLine($"❤️ Healthcheck сервер запущен на {healthPrefix}");
+    
+    while (true)
+    {
+        try
+        {
+            var context = await healthServer.GetContextAsync();
+            context.Response.StatusCode = 200;
+            byte[] buffer = Encoding.UTF8.GetBytes("OK");
+            context.Response.OutputStream.Write(buffer, 0, buffer.Length);
+            context.Response.Close();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Healthcheck error: {ex.Message}");
+        }
+    }
+}
+// =========================================================================
+
+// Основной цикл обработки запросов (твоя старая логика)
 while (true)
 {
-    var context = await server.GetContextAsync();
-    _ = Task.Run(() => ProcessRequest(context));
+    try
+    {
+        var context = await server.GetContextAsync();
+        _ = Task.Run(() => ProcessRequest(context));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Ошибка в основном цикле: {ex.Message}");
+    }
 }
 
 async Task HandleUpdates()
@@ -82,7 +122,7 @@ async Task HandleUpdates()
                 offset = update.Id + 1;
             }
         }
-        catch (Exception ex) { Console.WriteLine($"Ошибка: {ex.Message}{(ex.InnerException != null ? $" | Inner: {ex.InnerException.Message}" : "")}"); }
+        catch (Exception ex) { Console.WriteLine($"Ошибка HandleUpdates: {ex.Message}{(ex.InnerException != null ? $" | Inner: {ex.InnerException.Message}" : "")}"); }
         await Task.Delay(1000);
     }
 }
@@ -162,4 +202,3 @@ class NotifyRequest
     [JsonPropertyName("clientContact")]
     public string ClientContact { get; set; } = "";
 }
-
