@@ -109,7 +109,7 @@ if (BOT_TOKEN) {
         }
         try {
             const result = await pool.query(
-                'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramusername)) = $2',
+                'UPDATE designers SET telegram_chat_id = $1 WHERE lower(trim(leading \'@\' from telegramusername)) = $2'
                 [chatId, username]
             );
             if (result.rowCount > 0) {
